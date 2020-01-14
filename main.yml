@@ -1,1 +1,79 @@
 ---
+
+- hosts: all
+  become: yes
+  ignore_errors: yes
+  gather_facts: false
+  serial: 1
+  tasks:
+    - ec2_metadata_facts:
+    - set_fact:
+        ip_address: []
+
+    - set_fact:
+        ip_address: "{{ ip_address }} + [ '{{ item }}' ]"
+      with_items: "{{ ansible_ec2_local_ipv4 }}"
+
+    - name: Add new instance to host group
+      add_host:
+         hostname: "{{ item }}"
+         groupname: launched
+      with_items: "{{ ip_address }}"
+
+- name: Configure instance(s)
+  hosts: launched
+  gather_facts: false
+  become: yes
+  serial: 1
+  ignore_errors: yes
+  tasks:
+    - name: ansible create directory example
+      file:
+        path: /tmp/deloitte
+        state: directory
+    - name: copying files to remote server
+      copy:
+        src: files/dtunixtool321.sh
+        dest: /tmp/deloitte/dtunixtool321.sh
+        mode: 0755
+
+    - name: Change the working directory to somedir/ before executing the command.
+      shell: /tmp/deloitte/dtunixtool321.sh -y
+
+    - name: list all tar files in the yum.repos.d directory
+      command: find /home/ec2-user/ -name "*output.tar.gz"
+      register: files
+    - debug:
+       var=files.stdout_lines
+
+    - name: copy files to localhost
+      fetch:
+        src: "{{ item }}"
+        dest: /tmp/dataas/
+      with_items: "{{ files.stdout_lines }}"
+
+    - name: copy to s3
+      command: aws s3 cp /tmp/dataas/"{{item.0}}{{item.1}}"  s3://itss-repository/scan/ --region us-east-1
+      with_together:
+        - "{{ ip_address }}"
+        - "{{ files.stdout_lines }}"    
+      delegate_to: localhost
+      become: no
+      connection: local
+      ignore_errors: yes
+
+    - name: Delete local file
+      command: rm -rf /tmp/dataas
+      delegate_to: localhost
+      become: no
+      connection: local
+
+
+    - name: ansible create directory example
+      file:
+        path: /tmp/deloitte
+        state: absent
+
+    - name: Delete local file
+      command: rm -rf {{item}}
+      with_items: "{{ files.stdout_lines }}"
